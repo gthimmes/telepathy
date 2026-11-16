@@ -1,0 +1,25 @@
+{
+  "title": "Commerce overview",
+  "spec": {
+    "widgets": [
+      { "id": "orders", "title": "Orders completed", "type": "stat", "w": 4,
+        "query": { "signal": "metrics", "metric": "orders.completed", "agg": "sum" } },
+      { "id": "revenue", "title": "Revenue (USD)", "type": "stat", "w": 4,
+        "query": { "signal": "metrics", "metric": "orders.revenue", "agg": "sum" } },
+      { "id": "checkout-errors", "title": "Checkout error rate", "type": "stat", "w": 4,
+        "query": { "signal": "spans", "agg": "error_rate", "filter": "service:checkout kind:server" } },
+      { "id": "revenue-loc", "title": "Revenue by location", "type": "timeseries", "w": 6,
+        "query": { "signal": "metrics", "metric": "orders.revenue", "agg": "sum", "groupBy": ["location"] } },
+      { "id": "checkout-p95", "title": "Checkout p95 latency by location", "type": "timeseries", "w": 6,
+        "query": { "signal": "spans", "agg": "p95", "filter": "service:checkout kind:server", "groupBy": ["location"] } },
+      { "id": "pay-errors", "title": "Payment error rate by provider", "type": "timeseries", "w": 6,
+        "query": { "signal": "spans", "agg": "error_rate", "filter": "service:payments kind:server", "groupBy": ["payment.provider"] } },
+      { "id": "cpu", "title": "CPU utilization — payments, by location", "type": "timeseries", "w": 6,
+        "query": { "signal": "metrics", "metric": "system.cpu.utilization", "agg": "avg", "filter": "service:payments", "groupBy": ["location"] } },
+      { "id": "slow-ops", "title": "Slowest operations (p95)", "type": "toplist", "w": 6,
+        "query": { "signal": "spans", "agg": "p95", "filter": "kind:server", "groupBy": ["name"] } },
+      { "id": "error-logs", "title": "Error logs by service", "type": "toplist", "w": 6,
+        "query": { "signal": "logs", "agg": "count", "filter": "level:error", "groupBy": ["service"] } }
+    ]
+  }
+}

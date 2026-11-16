@@ -1,0 +1,11 @@
+# build output
+/bin/
+/internal/ui/dist/*
+!/internal/ui/dist/.gitkeep
+node_modules/
+
+# local data
+/.data/
+*.db
+*.db-shm
+*.db-wal
