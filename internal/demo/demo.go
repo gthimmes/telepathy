@@ -32,6 +32,7 @@ type Options struct {
 	Backfill time.Duration // history to generate before going live
 	Rate     int           // traces per second
 	APIKey   string
+	Once     bool // stop after the backfill instead of going live
 	Logf     func(format string, args ...any)
 }
 
@@ -105,6 +106,9 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		if err := g.flush(); err != nil {
 			return err
+		}
+		if opts.Once {
+			return nil
 		}
 		opts.Logf("demo: backfill complete, now live (%d traces/s)", opts.Rate)
 	}

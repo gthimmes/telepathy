@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, href, useFetch, useTime, type Dashboard, type Meta, type Query, type Widget } from './api'
+import { api, href, quote, useFetch, useTime, type Dashboard, type Meta, type Query, type Route, type Widget } from './api'
 import { Stat, TimeChart, TopList } from './chart'
 
 export function DashboardList() {
@@ -25,10 +25,20 @@ export function DashboardList() {
   )
 }
 
-function WidgetBody({ w }: { w: Widget }) {
+/** Dashboard variables narrow every widget, except ones that already pin that dimension. */
+type Vars = Record<string, string>
+const pins = (filter: string, key: string) => new RegExp(`(^|\\s)-?${key}[:<>!=]`).test(filter)
+function withVars(q: Query, vars: Vars): Query {
+  let filter = q.filter ?? ''
+  for (const [k, v] of Object.entries(vars)) if (v && !pins(filter, k)) filter = `${filter} ${k}:${quote(v)}`.trim()
+  return { ...q, filter }
+}
+
+function WidgetBody({ w, vars }: { w: Widget; vars: Vars }) {
   const { range, tick } = useTime()
-  const key = JSON.stringify(w.query)
-  const { data, error } = useFetch(() => api.query({ ...w.query, range, limit: 8 }), [key, range, tick])
+  const query = withVars(w.query, vars)
+  const key = JSON.stringify(query)
+  const { data, error } = useFetch(() => api.query({ ...query, range, limit: 8 }), [key, range, tick])
   if (error) return <div className="error">{error}</div>
   if (w.type === 'stat') return <Stat data={data} />
   if (w.type === 'toplist') return <TopList data={data} />
@@ -66,12 +76,20 @@ function WidgetForm({ meta, onAdd }: { meta?: Meta; onAdd: (w: Widget) => void }
   )
 }
 
-export function DashboardView({ id, edit }: { id: string; edit: boolean }) {
+export function DashboardView({ id, edit, route }: { id: string; edit: boolean; route: Route }) {
   const loaded = useFetch(() => api.dashboard(id), [id])
   const meta = useFetch(() => api.meta(), [])
   const [d, setD] = useState<Dashboard>()
   const [dirty, setDirty] = useState(false)
   const [err, setErr] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const vars: Vars = { service: route.params.get('service') ?? '', location: route.params.get('location') ?? '' }
+  const setVar = (k: string, v: string) => {
+    const p: Record<string, string> = {}
+    for (const [key, val] of Object.entries({ ...vars, [k]: v })) if (val) p[key] = val
+    if (edit) p.edit = '1'
+    window.location.hash = href(`/dashboards/${id}`, p)
+  }
   useEffect(() => { if (loaded.data) { setD(loaded.data); setDirty(false) } }, [loaded.data])
   if (loaded.error) return <div className="error">{loaded.error}</div>
   if (!d) return <div className="empty">Loading…</div>
@@ -84,7 +102,7 @@ export function DashboardView({ id, edit }: { id: string; edit: boolean }) {
     catch (e) { setErr(String((e as Error).message)) }
   }
   const remove = async () => {
-    if (!window.confirm(`Delete "${d.title}"?`)) return
+    if (!confirmDelete) { setConfirmDelete(true); return }
     await api.deleteDashboard(id)
     window.location.hash = href('/dashboards')
   }
@@ -98,9 +116,21 @@ export function DashboardView({ id, edit }: { id: string; edit: boolean }) {
         {edit ? <input className="title-input" value={d.title} onChange={e => change({ title: e.target.value })} aria-label="Dashboard title" /> : <h1>{d.title}</h1>}
         {d.provisioned && <span className="kind">provisioned</span>}
         <span className="spacer" />
+        {(['service', 'location'] as const).map(k => {
+          const known = (k === 'service' ? meta.data?.services : meta.data?.locations) ?? []
+          return (
+            <label key={k} className="var">{k}
+              <select value={vars[k]} onChange={e => setVar(k, e.target.value)}>
+                <option value="">All</option>
+                {vars[k] && !known.includes(vars[k]) && <option>{vars[k]}</option>}
+                {known.map(v => <option key={v}>{v}</option>)}
+              </select>
+            </label>
+          )
+        })}
         {edit ? (
           <>
-            <button className="btn danger" onClick={remove}>Delete</button>
+            <button className="btn danger" onClick={remove} onBlur={() => setConfirmDelete(false)}>{confirmDelete ? 'Really delete?' : 'Delete'}</button>
             <a className="btn" href={href(`/dashboards/${id}`)} onClick={() => { setD(loaded.data); setDirty(false) }}>Cancel</a>
             <button className="btn primary" onClick={save} disabled={!dirty}>Save</button>
           </>
@@ -123,7 +153,7 @@ export function DashboardView({ id, edit }: { id: string; edit: boolean }) {
                 </span>
               )}
             </div>
-            <WidgetBody w={w} />
+            <WidgetBody w={w} vars={vars} />
           </div>
         ))}
       </div>

@@ -1,6 +1,7 @@
 package query
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -130,5 +131,46 @@ func TestRunHealthExplain(t *testing.T) {
 	}
 	if len(ex.Changes) != 1 || !ex.Changes[0].Related {
 		t.Errorf("expected the deploy to be flagged as related: %+v", ex.Changes)
+	}
+}
+
+func TestServiceMap(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now()
+	var spans []store.Span
+	for i := 0; i < 20; i++ {
+		ts := now.Add(-time.Duration(i+1) * time.Second).UnixNano()
+		tid := fmt.Sprintf("t%d", i)
+		status := store.StatusOK
+		if i < 5 {
+			status = store.StatusError
+		}
+		spans = append(spans,
+			store.Span{TraceID: tid, SpanID: "a", Service: "web", Location: "eu", Name: "GET /", Kind: "server", TsNs: ts, DurationNs: 3e8},
+			store.Span{TraceID: tid, SpanID: "b", ParentID: "a", Service: "web", Location: "eu", Name: "call pay", Kind: "client", TsNs: ts, DurationNs: 2e8},
+			store.Span{TraceID: tid, SpanID: "c", ParentID: "b", Service: "pay", Location: "eu", Name: "POST /charge", Kind: "server", TsNs: ts, DurationNs: 1e8, Status: status},
+		)
+	}
+	if err := st.InsertSpans(spans); err != nil {
+		t.Fatal(err)
+	}
+	tr := TimeRange{FromNs: now.Add(-time.Minute).UnixNano(), ToNs: now.UnixNano()}
+	m, err := ServiceMap(st.DB(), tr, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Nodes) != 2 || len(m.Edges) != 1 {
+		t.Fatalf("map: %+v", m)
+	}
+	e := m.Edges[0]
+	if e.From != "web" || e.To != "pay" || e.Calls != 20 || e.ErrorRate != 25 || e.P95 != 100 {
+		t.Errorf("edge: %+v", e)
+	}
+	if m, _ := ServiceMap(st.DB(), tr, "us"); len(m.Edges) != 0 {
+		t.Errorf("location filter ignored: %+v", m.Edges)
 	}
 }

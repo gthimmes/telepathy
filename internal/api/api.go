@@ -2,8 +2,6 @@
 package api
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -12,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gthimmes/telepathy/internal/alert"
 	"github.com/gthimmes/telepathy/internal/query"
 	"github.com/gthimmes/telepathy/internal/store"
 )
@@ -19,6 +18,7 @@ import (
 type API struct {
 	Store   *store.Store
 	Version string
+	Alerts  *alert.Engine // optional; enables channel tests
 }
 
 func (a *API) Register(mux *http.ServeMux) {
@@ -37,6 +37,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/dashboards/{id}", a.getDashboard)
 	mux.HandleFunc("PUT /api/v1/dashboards/{id}", a.putDashboard)
 	mux.HandleFunc("DELETE /api/v1/dashboards/{id}", a.deleteDashboard)
+	a.registerM1(mux)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -242,9 +243,7 @@ func (a *API) putDashboard(w http.ResponseWriter, r *http.Request) {
 		d.ID = id
 	}
 	if d.ID == "" {
-		b := make([]byte, 6)
-		rand.Read(b)
-		d.ID = hex.EncodeToString(b)
+		d.ID = store.NewID()
 	}
 	if d.Title == "" || !json.Valid(d.Spec) {
 		fail(w, 400, errStr("title and a JSON spec are required"))
