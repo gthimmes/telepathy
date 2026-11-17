@@ -36,7 +36,6 @@ var DefaultLocationKeys = []string{"telepathy.location", "location", "site.id", 
 type Handler struct {
 	Store        *store.Store
 	LocationKeys []string
-	APIKey       string // optional; when set, ingest requires it
 }
 
 func (h *Handler) Register(mux *http.ServeMux) {
@@ -49,16 +48,6 @@ type decodeFn func(body []byte, isJSON bool) (resp proto.Message, err error)
 
 func (h *Handler) wrap(fn decodeFn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if h.APIKey != "" {
-			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if k := r.Header.Get("X-Telepathy-Key"); k != "" {
-				got = k
-			}
-			if got != h.APIKey {
-				http.Error(w, "invalid ingest key", http.StatusUnauthorized)
-				return
-			}
-		}
 		var rd io.Reader = http.MaxBytesReader(w, r.Body, maxBody)
 		if r.Header.Get("Content-Encoding") == "gzip" {
 			gz, err := gzip.NewReader(rd)
@@ -219,6 +208,11 @@ func (h *Handler) traces(body []byte, isJSON bool) (proto.Message, error) {
 	if err := unmarshal(body, isJSON, &req); err != nil {
 		return nil, fmt.Errorf("decode traces: %w", err)
 	}
+	return &coltrace.ExportTraceServiceResponse{}, h.ConsumeTrace(&req)
+}
+
+// ConsumeTrace normalizes and stores a decoded OTLP request (shared by HTTP and gRPC).
+func (h *Handler) ConsumeTrace(req *coltrace.ExportTraceServiceRequest) error {
 	var out []store.Span
 	for _, rs := range req.GetResourceSpans() {
 		res := h.resource(rs.GetResource())
@@ -258,7 +252,7 @@ func (h *Handler) traces(body []byte, isJSON bool) (proto.Message, error) {
 			}
 		}
 	}
-	return &coltrace.ExportTraceServiceResponse{}, h.Store.InsertSpans(out)
+	return h.Store.InsertSpans(out)
 }
 
 func severityText(n int) string {
@@ -284,6 +278,11 @@ func (h *Handler) logs(body []byte, isJSON bool) (proto.Message, error) {
 	if err := unmarshal(body, isJSON, &req); err != nil {
 		return nil, fmt.Errorf("decode logs: %w", err)
 	}
+	return &collogs.ExportLogsServiceResponse{}, h.ConsumeLogs(&req)
+}
+
+// ConsumeLogs normalizes and stores a decoded OTLP request (shared by HTTP and gRPC).
+func (h *Handler) ConsumeLogs(req *collogs.ExportLogsServiceRequest) error {
 	now := time.Now().UnixNano()
 	var out []store.Log
 	for _, rl := range req.GetResourceLogs() {
@@ -316,7 +315,7 @@ func (h *Handler) logs(body []byte, isJSON bool) (proto.Message, error) {
 			}
 		}
 	}
-	return &collogs.ExportLogsServiceResponse{}, h.Store.InsertLogs(out)
+	return h.Store.InsertLogs(out)
 }
 
 func numberValue(dp *metricspb.NumberDataPoint) float64 {
@@ -331,6 +330,11 @@ func (h *Handler) metrics(body []byte, isJSON bool) (proto.Message, error) {
 	if err := unmarshal(body, isJSON, &req); err != nil {
 		return nil, fmt.Errorf("decode metrics: %w", err)
 	}
+	return &colmetrics.ExportMetricsServiceResponse{}, h.ConsumeMetrics(&req)
+}
+
+// ConsumeMetrics normalizes and stores a decoded OTLP request (shared by HTTP and gRPC).
+func (h *Handler) ConsumeMetrics(req *colmetrics.ExportMetricsServiceRequest) error {
 	var out []store.MetricPoint
 	for _, rm := range req.GetResourceMetrics() {
 		res := h.resource(rm.GetResource())
@@ -376,5 +380,5 @@ func (h *Handler) metrics(body []byte, isJSON bool) (proto.Message, error) {
 			}
 		}
 	}
-	return &colmetrics.ExportMetricsServiceResponse{}, h.Store.InsertMetrics(out)
+	return h.Store.InsertMetrics(out)
 }

@@ -35,6 +35,20 @@ export interface ExplainResult { selection: string; selectionCount: number; base
 export interface Trace { traceId: string; spans: Span[]; logs: Log[] }
 export interface Meta { services: string[]; locations: string[]; metrics: string[] }
 export interface Widget { id: string; title: string; type: 'timeseries' | 'stat' | 'toplist'; w: number; query: Query }
+export interface Session { authRequired: boolean; authenticated: boolean; role: string }
+export interface AlertDetails { scope?: string; reasons?: string[]; value?: number; unit?: string; findings?: Finding[]; triggers?: string[]; causedBy?: string; impacted?: string[] }
+export interface Alert {
+  id: number; monitorId: string; monitorName: string; key: string; status: 'firing' | 'resolved'; severity: Status
+  title: string; summary: string; service: string; location: string
+  startedMs: number; updatedMs: number; resolvedMs: number; details: AlertDetails; notifyError?: string
+}
+export interface QuerySpec { query: Query; op: string; threshold: number; window?: string; severity?: string; forEvals?: number }
+export interface Monitor { id: string; name: string; kind: 'health' | 'query'; spec: Partial<QuerySpec> & { statuses?: string[]; service?: string; location?: string }; enabled: boolean }
+export interface Channel { id: string; name: string; kind: 'webhook' | 'slack' | 'pagerduty'; url: string }
+export interface Token { id: string; name: string; role: string; prefix: string; createdMs: number; lastUsedMs: number }
+export interface MapNode { service: string; status: Status; rate: number; errorRate: number; p95: number }
+export interface MapEdge { from: string; to: string; calls: number; rate: number; errorRate: number; p95: number }
+export interface ServiceMap { nodes: MapNode[]; edges: MapEdge[]; sampled: boolean }
 export interface Dashboard { id: string; title: string; spec: { widgets: Widget[] }; updatedMs: number; provisioned: boolean }
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -43,6 +57,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     body: body ? JSON.stringify(body) : undefined,
   })
   if (res.status === 204) return undefined as T
+  if (res.status === 401 && path !== '/login') window.dispatchEvent(new Event('telepathy:signed-out'))
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error || res.statusText)
   return data as T
@@ -63,6 +78,21 @@ export const api = {
   dashboard: (id: string) => call<Dashboard>('GET', '/dashboards/' + id),
   saveDashboard: (d: Partial<Dashboard>) => call<Dashboard>(d.id ? 'PUT' : 'POST', '/dashboards' + (d.id ? '/' + d.id : ''), d),
   deleteDashboard: (id: string) => call<void>('DELETE', '/dashboards/' + id),
+  session: () => call<Session>('GET', '/session'),
+  login: (password: string) => call<Session>('POST', '/login', { password }),
+  logout: () => call<void>('POST', '/logout', {}),
+  serviceMap: (range: string, location: string) => call<ServiceMap>('GET', '/servicemap' + qs({ range, location })),
+  alerts: () => call<{ firing: Alert[]; recent: Alert[] }>('GET', '/alerts'),
+  monitors: () => call<{ monitors: Monitor[] }>('GET', '/monitors'),
+  saveMonitor: (m: Partial<Monitor>) => call<Monitor>(m.id ? 'PUT' : 'POST', '/monitors' + (m.id ? '/' + m.id : ''), m),
+  deleteMonitor: (id: string) => call<void>('DELETE', '/monitors/' + id),
+  channels: () => call<{ channels: Channel[] }>('GET', '/channels'),
+  addChannel: (c: Partial<Channel>) => call<Channel>('POST', '/channels', c),
+  deleteChannel: (id: string) => call<void>('DELETE', '/channels/' + id),
+  testChannel: (id: string) => call<{ ok: boolean }>('POST', `/channels/${id}/test`, {}),
+  tokens: () => call<{ tokens: Token[] }>('GET', '/tokens'),
+  createToken: (name: string, role: string) => call<{ token: Token; secret: string }>('POST', '/tokens', { name, role }),
+  deleteToken: (id: string) => call<void>('DELETE', '/tokens/' + id),
 }
 
 /** Global time range + refresh tick shared by every page. */
@@ -115,6 +145,13 @@ export function fmt(v: number | null | undefined, unit = ''): string {
 }
 export const clock = (ms: number, secs = false) =>
   new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: secs ? '2-digit' : undefined })
+/** Quote a filter value that contains spaces. */
+export const quote = (v: string) => (/[\s"]/.test(v) ? `"${v.replace(/"/g, '')}"` : v)
+/** A length of time, e.g. "4m". */
+export function howLong(ms: number): string {
+  const s = Math.max(0, ms / 1000)
+  return s < 90 ? `${Math.round(s)}s` : s < 5400 ? `${Math.round(s / 60)}m` : `${(s / 3600).toFixed(1)}h`
+}
 export function ago(ms: number): string {
   const s = Math.max(0, (Date.now() - ms) / 1000)
   return s < 90 ? `${Math.round(s)}s ago` : s < 5400 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`

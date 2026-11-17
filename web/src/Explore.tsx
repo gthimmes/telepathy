@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
-import { api, clock, fmt, href, useFetch, useTime, type Finding, type Route } from './api'
+import { api, clock, fmt, href, quote, useFetch, useTime, type Finding, type Route } from './api'
 import { TimeChart } from './chart'
 
-const quote = (v: string) => (/[\s"]/.test(v) ? `"${v}"` : v)
 /** Span-only fields mean nothing to logs; drop them when reusing the filter. */
 const forLogs = (f: string) => f.split(/\s+/).filter(t => !/^-?(status|duration|kind|name|span_id|parent_id)[:<>!]/.test(t)).join(' ')
 

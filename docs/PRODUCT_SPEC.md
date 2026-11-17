@@ -1,6 +1,6 @@
 # Telepathy — Product Specification
 
-**Status:** v0.1 (living document) · **Last updated:** 2026-11-15
+**Status:** v0.2 (living document) · **Last updated:** 2026-11-17
 
 Telepathy is an observability platform: it collects telemetry from production
 applications, shows the health of every application at every location, helps
@@ -65,7 +65,7 @@ Principles that decide trade-offs:
 
 ## 4. Product areas
 
-Legend — **Now**: implemented in this repo · **Next**: M1–M2 · **Later**: M3+
+Legend — **Now**: implemented in this repo (M0–M1) · **Next**: M2 · **Later**: M3+
 
 ### 4.1 Collect — getting data out of production
 
@@ -74,8 +74,8 @@ Legend — **Now**: implemented in this repo · **Next**: M1–M2 · **Later**: 
 | OTLP/HTTP ingest | `/v1/traces`, `/v1/logs`, `/v1/metrics`; protobuf and JSON; gzip | **Now** |
 | Location resolution | Configurable chain of resource attributes (`telepathy.location` → `site.id` → `cloud.region` → …) promoted to a first-class column | **Now** |
 | Change events API | `POST /api/v1/events` for deploys, flags, config, scaling — one `curl` from CI | **Now** |
-| Ingest keys | Optional bearer key on OTLP ingest | **Now** |
-| OTLP/gRPC | Port 4317 | Next |
+| OTLP/gRPC | Port 4317, gzip, same normalization as HTTP | **Now** |
+| Ingest credentials | API tokens with an `ingest` role (or one static key) on HTTP and gRPC | **Now** |
 | Collector recipes | Tested OTel Collector configs for hosts, Kubernetes, common databases and queues | Next |
 | Edge buffering | Store-and-forward guidance and collector config for sites with unreliable links, with late-arriving data handled correctly | Next |
 | Tail-based sampling at ingest | Keep 100% of errors and slow traces, sample the boring majority; exact RED metrics computed before sampling | Next |
@@ -90,7 +90,7 @@ Legend — **Now**: implemented in this repo · **Next**: M1–M2 · **Later**: 
 | **Zero-config health scoring** | Each cell compared against the median of its own preceding windows plus absolute guardrails; statuses *healthy / degraded / critical / silent* with plain-language reasons | **Now** |
 | **Silence detection** | A cell that had traffic and now has none is flagged, not hidden | **Now** |
 | Change timeline | Recent deploys/flags beside health, and marked on every chart | **Now** |
-| Service map | Dependency graph derived from trace parent/child edges, colored by health | Next |
+| Service map | Dependency graph derived from trace parent/child edges, with health, traffic, errors and latency on nodes and edges; filter by location | **Now** |
 | Location hierarchy & map | Region → site → device rollups; geographic view | Next |
 | SLOs | Declared objectives, error budgets, burn-rate alerts | Next |
 | Seasonality-aware baselines | Hour-of-week baselines so Monday 9am is compared to Mondays at 9am | Next |
@@ -106,7 +106,11 @@ Legend — **Now**: implemented in this repo · **Next**: M1–M2 · **Later**: 
 | Golden-signal explorer | Rate / errors / p95 for any filter, split by any attribute | **Now** |
 | Trace waterfall | Spans, errors and the logs emitted inside the trace in one view | **Now** |
 | Log search | Filter by any attribute; jump from a log line to its trace | **Now** |
-| Alerting | Health-status transitions and query-based monitors → Slack, PagerDuty, webhooks; alerts carry the Explain result in the notification | Next |
+| **Zero-config alerting** | A health monitor exists from first start: alerts on any cell becoming critical, degraded or silent, with hysteresis | **Now** |
+| Query monitors | The explorer's query object plus a comparison, alerting per series | **Now** |
+| **Alerts with a hypothesis** | Every alert stores the Explain result and the change that likely triggered it; Slack, PagerDuty and webhook notifications carry them | **Now** |
+| **Root-cause grouping** | When a failure cascades along the service map, callers are recorded as downstream symptoms and only the root service notifies | **Now** |
+| Alert routing & silences | Per-team routing, maintenance windows, escalation policies, monitors as code | Next |
 | Incident timeline | Auto-assembled record: first anomaly, changes, alerts, who looked at what | Next |
 | Saved investigations | Shareable, replayable query notebooks | Later |
 
@@ -117,7 +121,7 @@ Legend — **Now**: implemented in this repo · **Next**: M1–M2 · **Later**: 
 | Dashboard builder | Time series, single number and top-list widgets over any signal; any filter, any split | **Now** |
 | **Dashboards as code** | JSON files in `dashboards/` are provisioned at startup; the editor exports the same format; editing in the UI detaches from the file rather than being silently overwritten | **Now** |
 | Shared time range & live refresh | Global range and a pause-able 10s refresh | **Now** |
-| Template variables | Dashboard-level `service` / `location` pickers applied to every widget | Next |
+| Dashboard variables | `service` / `location` pickers on every dashboard, applied to each widget that does not already pin that dimension | **Now** |
 | More widgets | Heatmaps, health-matrix widget, tables, markdown, SLO widgets | Next |
 | Sharing & permissions | Teams, folders, read-only links, scheduled snapshots | Later |
 
@@ -138,7 +142,9 @@ extension, not a rewrite. Planned in order of confidence:
 |---|---|
 | Single static binary, embedded store and UI, Docker image | **Now** |
 | Retention policy | **Now** |
-| Authentication (OIDC), API tokens, RBAC, multi-tenancy | Next |
+| Authentication: admin sign-in and API tokens with `ingest` / `read` / `admin` roles | **Now** |
+| Load test (`telepathy bench`) for ingest throughput and query latency | **Now** |
+| Single sign-on (OIDC), per-user accounts, RBAC, multi-tenancy | Next |
 | **MCP server** exposing health, query, explain and trace tools to AI agents | Next |
 | Natural-language → query, grounded in the actual attribute catalog | Next |
 | Columnar storage backend (ClickHouse) + object-storage cold tier | Next |
@@ -149,14 +155,17 @@ extension, not a rewrite. Planned in order of confidence:
 1. **Health without configuration.** Install it, point OTLP at it, and the
    matrix is meaningful — no monitors authored, no thresholds guessed.
 2. **Application × location as the home page.** Not hosts, not a service list.
-3. **Explain is built in and one click away**, not a premium add-on behind a
+3. **Alerts arrive with a hypothesis, and only the root cause pages.** The
+   notification already says what is different and which deploy preceded it;
+   services that are merely downstream are recorded, not paged.
+4. **Explain is built in and one click away**, not a premium add-on behind a
    query-builder. It runs on every attribute you send, including the custom
    ones we've never heard of.
-4. **Changes are telemetry.** Deploys and flags sit on every chart and are
+5. **Changes are telemetry.** Deploys and flags sit on every chart and are
    offered as the probable cause.
-5. **One query object** for exploration, dashboards and (next) alerts, so there
+6. **One query object** for exploration, dashboards and monitors, so there
    is exactly one thing to learn and one thing for an agent to generate.
-6. **OTel-native with no lock-in**, in one binary you can run on a laptop.
+7. **OTel-native with no lock-in**, in one binary you can run on a laptop.
 
 ## 6. Non-goals (for now)
 
@@ -174,14 +183,15 @@ extension, not a rewrite. Planned in order of confidence:
 | Median time from "open Telepathy" to "root cause hypothesis" | < 3 minutes |
 | Hand-authored monitors needed for a new service | 0 |
 | Health false-positive rate (cells flagged with no user impact) | < 5% of flagged cells |
+| Notifications per incident (root-cause grouping) | 1 |
 
 ## 8. Roadmap
 
 | Milestone | Theme | Contents |
 |---|---|---|
-| **M0 — Foundation** *(this repo, done)* | A working vertical slice | OTLP/HTTP ingest for all three signals, embedded store, unified filter + query API, health matrix with baselines, Explain with change correlation, trace & log views, dashboard builder + dashboards-as-code, demo generator |
-| **M1 — Trustworthy** | Make it safe to depend on | Alerting & notifications, auth + API tokens, OTLP/gRPC, service map, template variables, ingest/query load tests, ClickHouse backend behind the storage interface |
-| **M2 — Team scale** | Many teams, many locations | SLOs & error budgets, location hierarchy and map, RBAC/multi-tenancy, tail sampling, seasonality baselines, MCP server + NL query |
+| **M0 — Foundation** *(done)* | A working vertical slice | OTLP/HTTP ingest for all three signals, embedded store, unified filter + query API, health matrix with baselines, Explain with change correlation, trace & log views, dashboard builder + dashboards-as-code, demo generator |
+| **M1 — Trustworthy** *(done)* | Make it safe to depend on | Zero-config alerting, query monitors, Slack/PagerDuty/webhook notifications with Explain attached, root-cause grouping, authentication + API tokens, OTLP/gRPC, service map, dashboard variables, load test |
+| **M2 — Team scale** | Many teams, many locations, much more data | Columnar storage backend (moved from M1: the load test shows where the embedded store runs out, and the engine choice is open question 3), SLOs & error budgets, location hierarchy and map, OIDC + RBAC + multi-tenancy, alert routing and silences, tail sampling, seasonality baselines, MCP server + NL query |
 | **M3 — Predict** | From reactive to proactive | Forecasting, anomaly functions, deploy risk scoring, incident similarity |
 | **M4 — Breadth** | Remaining parity | RUM, synthetics, profiling, infrastructure views, cost explorer |
 
@@ -191,4 +201,6 @@ extension, not a rewrite. Planned in order of confidence:
 2. **Location semantics** — is a flat location enough for early users, or is hierarchy (region → site → device) needed in M1?
 3. **Storage** — commit to ClickHouse for scale-out, or evaluate an embedded columnar engine to preserve the single-binary story longer?
 4. **Explain at scale** — sampling strategy and pre-aggregated attribute sketches once span volume makes full scans impractical.
-5. **License** — not yet chosen for this repository.
+5. **Alert routing** — every alert currently goes to every channel. What is the smallest routing model (by service owner? by location?) that early users need?
+
+**Decided:** the repository is licensed under Apache 2.0 — permissive, with a patent grant, and the same license as OpenTelemetry itself, so it can be embedded and contributed to without friction. If a managed offering (question 1) later needs protection from resale, that can be handled with separately licensed enterprise components rather than by relicensing the core.
