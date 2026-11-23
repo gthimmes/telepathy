@@ -6,6 +6,7 @@ import Explore from './Explore'
 import TraceView from './TraceView'
 import ServiceMap from './ServiceMap'
 import Alerts from './Alerts'
+import SLOs from './SLOs'
 import Settings, { Login } from './Settings'
 import { DashboardList, DashboardView } from './Dashboards'
 import './styles.css'
@@ -47,12 +48,13 @@ function App() {
   else if (section === 'trace' && seg[1]) page = <TraceView key={seg[1]} id={seg[1]} route={route} />
   else if (section === 'map') page = <ServiceMap route={route} />
   else if (section === 'alerts') page = <Alerts />
+  else if (section === 'slos') page = <SLOs />
   else if (section === 'settings') page = <Settings session={session} onSignOut={loadSession} />
   else if (section === 'dashboards' && seg[1]) page = <DashboardView key={seg[1]} id={seg[1]} edit={route.params.has('edit')} route={route} />
   else if (section === 'dashboards') page = <DashboardList />
   else page = <Health />
 
-  const nav = [['health', '/', 'Health'], ['map', '/map', 'Map'], ['explore', '/explore', 'Explore'], ['dashboards', '/dashboards', 'Dashboards'], ['alerts', '/alerts', 'Alerts'], ['settings', '/settings', 'Settings']]
+  const nav = [['health', '/', 'Health'], ['map', '/map', 'Map'], ['explore', '/explore', 'Explore'], ['dashboards', '/dashboards', 'Dashboards'], ['slos', '/slos', 'SLOs'], ['alerts', '/alerts', 'Alerts'], ['settings', '/settings', 'Settings']]
   return (
     <TimeCtx.Provider value={{ range, tick }}>
       <header className="top">

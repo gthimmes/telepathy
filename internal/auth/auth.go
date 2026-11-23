@@ -154,6 +154,8 @@ func required(r *http.Request) string {
 		return RoleAdmin
 	case r.Method == http.MethodGet, r.Method == http.MethodHead:
 		return RoleRead
+	case p == "/api/v1/mcp":
+		return RoleRead // every MCP tool is read-only
 	case r.Method == http.MethodPost && (p == "/api/v1/query" || p == "/api/v1/explain"):
 		return RoleRead // read-only despite the verb
 	}

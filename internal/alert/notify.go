@@ -37,14 +37,36 @@ func (e *Engine) Link(a *store.Alert) string {
 	return base + "/#/explore?" + q.Encode()
 }
 
-// notify sends an alert event to every channel and returns the last error text.
+// notify sends an alert event to every channel whose routing matches the
+// alert, unless a silence covers it, and returns the last error text.
 func (e *Engine) notify(event string, a *store.Alert) string {
+	nowMs := time.Now().UnixMilli()
+	if silences, err := e.Store.ListSilences(nowMs); err == nil {
+		for _, s := range silences {
+			if !s.Covers(a.Service, a.Location, nowMs) {
+				continue
+			}
+			var d Details
+			json.Unmarshal(a.Details, &d)
+			d.Silenced = s.Reason
+			if d.Silenced == "" {
+				d.Silenced = "silenced"
+			}
+			a.Details, _ = json.Marshal(d)
+			e.Store.SaveAlert(a)
+			e.logf("alerting: %s (%s) not notified: silenced", a.Title, event)
+			return ""
+		}
+	}
 	chans, err := e.Store.ListChannels()
 	if err != nil {
 		return err.Error()
 	}
 	last := ""
 	for _, c := range chans {
+		if !c.Routes(a.Service, a.Location, a.Severity) {
+			continue
+		}
 		if err := e.Send(c, event, a); err != nil {
 			last = c.Name + ": " + err.Error()
 			e.logf("alerting: notify %s failed: %v", c.Name, err)

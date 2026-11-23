@@ -175,11 +175,16 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(schema + adminSchema); err != nil {
+	if _, err := db.Exec(schema + adminSchema + rollupSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
-	return &Store{db: db}, nil
+	s := &Store{db: db}
+	if err := s.migrate(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	return s, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -224,14 +229,18 @@ func (s *Store) InsertSpans(spans []Span) error {
 			return err
 		}
 		defer st.Close()
+		batch := rollupBatch{}
 		for i := range spans {
 			p := &spans[i]
 			if _, err := st.Exec(p.TsNs, p.TraceID, p.SpanID, p.ParentID, p.Service, p.Location, p.Env,
 				p.Name, p.Kind, p.DurationNs, p.Status, p.StatusMsg, attrsJSON(p.Attrs)); err != nil {
 				return err
 			}
+			if isRequest(p.Kind, p.ParentID) {
+				batch.add(p.TsNs, p.Service, p.Location, p.DurationNs, p.Status == StatusError)
+			}
 		}
-		return nil
+		return batch.flush(tx)
 	})
 }
 

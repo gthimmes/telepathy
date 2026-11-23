@@ -147,6 +147,7 @@ func TestHealthMonitorLifecycle(t *testing.T) {
 	if _, err := st.DB().Exec(`DELETE FROM spans WHERE status=2`); err != nil {
 		t.Fatal(err)
 	}
+	st.RebuildRollups() // spans were edited behind the store's back
 	e.Evaluate()
 	if firing, _ := st.FiringAlerts(); len(firing) != 1 {
 		t.Fatal("alert resolved on the first clear evaluation")

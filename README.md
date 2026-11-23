@@ -28,6 +28,13 @@ explains *why* something broke, and lets you build custom dashboards.
   the health matrix. Each notification carries the Explain result and the
   deploy that probably caused it — and when a failure cascades through several
   services, only the root one pages you.
+- **SLOs that say where.** Declare "99.9% of checkout requests succeed over
+  30 days" and see the error budget that is left — in total and for every
+  location, worst first — with burn-rate alerts that defer to the health alert
+  for the same incident.
+- **Built for agents as well as people.** Telepathy is an MCP server: an AI
+  agent can read health, alerts and SLOs, run Explain and query telemetry with
+  the same tools the UI uses.
 - **Changes are telemetry.** Deploys and flag flips are recorded with one `curl`,
   drawn on every chart, and offered as the likely trigger.
 - **One query for everything.** The same filter language and query object power
@@ -92,7 +99,8 @@ curl -X POST http://localhost:4318/api/v1/events \
 | **Explore** | Rate, errors and latency for any filter, split by any attribute — then **Explain**, matching **Traces**, and **Logs** |
 | **Trace** | The waterfall of one request across services, with its errors and logs |
 | **Dashboards** | Build your own from time series, single numbers and top lists; narrow any dashboard by service or location |
-| **Alerts** | What is firing, why, and what probably caused it; monitors and notification channels |
+| **SLOs** | How much error budget is left for each objective, how fast it is burning, and which location is spending it |
+| **Alerts** | What is firing, why, and what probably caused it; monitors, notification channels and their routing, silences |
 | **Settings** | API tokens and how to connect |
 
 ![Service map](docs/img/map.png)
@@ -120,6 +128,41 @@ Add a **Slack**, **PagerDuty** or generic **webhook** channel on the same page.
 A condition must hold for two consecutive evaluations (30 s apart) before it
 fires or resolves. Set `--public-url` so links in notifications point at your
 server.
+
+**Routing.** A channel can be limited to some services (`pay*, checkout`),
+some locations (`eu-*`) and to critical alerts only; a channel with no limits
+receives everything.
+
+**Silences.** Stop notifications for matching services and locations for a
+while (planned maintenance, an incident already in hand). Alerts are still
+recorded and say that they were silenced.
+
+## SLOs
+
+An SLO is a target for one service: a share of requests that must succeed, or
+finish within a latency threshold, over a rolling window of up to 90 days,
+optionally limited to some locations. The SLOs page shows the measured
+percentage, the error budget left, how it was spent over time and a
+per-location breakdown.
+
+![SLOs: error budget, burn rate and the location spending it](docs/img/slos.png)
+
+The built-in **SLO burn rate** monitor alerts when a budget is being spent
+14.4× too fast over an hour (critical) or 6× over six hours (degraded). If a
+health alert is already firing for that service, the SLO alert is recorded but
+does not notify a second time.
+
+## AI agents (MCP)
+
+`/api/v1/mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server (Streamable HTTP). Its tools are read-only: `get_health`, `list_alerts`,
+`explain`, `query_timeseries`, `search_spans`, `search_logs`, `get_trace`,
+`get_service_map`, `list_changes`, `list_slos`, `get_metadata`.
+
+```sh
+claude mcp add --transport http telepathy http://localhost:4318/api/v1/mcp
+# with authentication on, add:  --header "Authorization: Bearer <read token>"
+```
 
 ## Authentication
 
@@ -183,10 +226,12 @@ The API is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#http-api).
 
 ## Roadmap
 
-Done: M0 (foundation) and M1 (alerting, authentication, OTLP/gRPC, service map,
-dashboard variables, load test). Next (M2): a columnar storage backend for
-scale, SLOs, location hierarchy, RBAC, an MCP server for AI agents. After that,
-the predictive pillar: forecasting, anomaly detection and deploy risk scoring.
+Done: M0 (foundation), M1 (alerting, authentication, OTLP/gRPC, service map,
+dashboard variables, load test) and the first half of M2 (request rollups,
+SLOs with burn-rate alerts, alert routing and silences, MCP server). Still to
+come in M2: a columnar storage backend, location hierarchy, single sign-on and
+RBAC, tail sampling, seasonality-aware baselines. After that, the predictive
+pillar: forecasting, anomaly detection and deploy risk scoring.
 Details in the [product spec](docs/PRODUCT_SPEC.md#8-roadmap).
 
 ## License

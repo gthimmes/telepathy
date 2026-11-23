@@ -29,7 +29,7 @@ import (
 	"github.com/gthimmes/telepathy/internal/ui"
 )
 
-var version = "0.2.0-dev"
+var version = "0.3.0-dev"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -99,6 +99,9 @@ func serve(ctx context.Context, args []string) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer st.Close()
+	if err := st.EnsureRollups(log.Printf); err != nil {
+		return fmt.Errorf("upgrade database: %w", err)
+	}
 
 	if _, err := os.Stat(*dashDir); err == nil {
 		n, err := api.ProvisionDashboards(st, *dashDir)
@@ -124,6 +127,12 @@ func serve(ctx context.Context, args []string) error {
 		b := make([]byte, 24)
 		rand.Read(b)
 		au.IngestKey = hex.EncodeToString(b)
+	}
+
+	if *withDemo {
+		if err := demoSLOs(st); err != nil {
+			return err
+		}
 	}
 
 	var engine *alert.Engine
@@ -170,6 +179,8 @@ func serve(ctx context.Context, args []string) error {
 				log.Printf("retention: %v", err)
 			}
 			st.PruneAlerts(time.Now().Add(-30 * 24 * time.Hour).UnixMilli())
+			// Rollups outlive raw data: minutes for burn rates, hours for SLO windows.
+			st.PruneRollups(time.Now().Add(-4*24*time.Hour).Unix(), time.Now().Add(-400*24*time.Hour).Unix())
 			select {
 			case <-ctx.Done():
 				return
@@ -220,4 +231,20 @@ func runDemo(ctx context.Context, args []string) error {
 	key := fs.String("ingest-key", env("TELEPATHY_INGEST_KEY", ""), "ingest key or API token, if the server requires one")
 	fs.Parse(args)
 	return demo.Run(ctx, demo.Options{Endpoint: *endpoint, Backfill: *backfill, Rate: *rate, APIKey: *key, Logf: log.Printf})
+}
+
+// demoSLOs gives the demo two objectives to look at, once.
+func demoSLOs(st *store.Store) error {
+	if st.Setting("demo.slos") != "" {
+		return nil
+	}
+	for _, x := range []store.SLO{
+		{Name: "Checkout availability", Service: "checkout", Kind: "availability", Target: 99, WindowDays: 30},
+		{Name: "Payments under 400 ms", Service: "payments", Kind: "latency", ThresholdMs: 400, Target: 95, WindowDays: 7},
+	} {
+		if err := st.PutSLO(&x); err != nil {
+			return err
+		}
+	}
+	return st.SetSetting("demo.slos", "1")
 }

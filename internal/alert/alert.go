@@ -44,14 +44,16 @@ type QuerySpec struct {
 
 // Details is the evidence attached to an alert.
 type Details struct {
-	Scope    string          `json:"scope"`              // filter that reproduces the alert's subject
-	Reasons  []string        `json:"reasons,omitempty"`  // why health flagged it
-	Value    *float64        `json:"value,omitempty"`    // query monitors: the measured value
-	Unit     string          `json:"unit,omitempty"`     //
-	Findings []query.Finding `json:"findings,omitempty"` // Explain: what is over-represented
-	Triggers []string        `json:"triggers,omitempty"` // change events that likely caused it
-	CausedBy string          `json:"causedBy,omitempty"` // an unhealthy dependency this alert is downstream of
-	Impacted []string        `json:"impacted,omitempty"` // callers that are unhealthy because of this one
+	Scope     string          `json:"scope"`               // filter that reproduces the alert's subject
+	Reasons   []string        `json:"reasons,omitempty"`   // why health flagged it
+	Value     *float64        `json:"value,omitempty"`     // query monitors: the measured value
+	Unit      string          `json:"unit,omitempty"`      //
+	Findings  []query.Finding `json:"findings,omitempty"`  // Explain: what is over-represented
+	Triggers  []string        `json:"triggers,omitempty"`  // change events that likely caused it
+	CausedBy  string          `json:"causedBy,omitempty"`  // an unhealthy dependency this alert is downstream of
+	CoveredBy string          `json:"coveredBy,omitempty"` // another firing alert that already notified for this service
+	Silenced  string          `json:"silenced,omitempty"`  // reason of the silence that suppressed the notification
+	Impacted  []string        `json:"impacted,omitempty"`  // callers that are unhealthy because of this one
 }
 
 // ValidateMonitor checks a monitor's spec (query monitors are test-run).
@@ -93,8 +95,10 @@ func ValidateMonitor(st *store.Store, m *store.Monitor) error {
 		if _, err := query.Run(st.DB(), req); err != nil {
 			return err
 		}
+	case "slo":
+		// Watches every SLO; nothing to configure.
 	default:
-		return fmt.Errorf("kind must be health or query")
+		return fmt.Errorf("kind must be health, query or slo")
 	}
 	return nil
 }
@@ -116,8 +120,19 @@ func forEvals(n int) int {
 // DefaultHealthMonitor is installed on first start so alerting works with no setup.
 const DefaultHealthMonitor = "default-health"
 
-// EnsureDefaults creates the built-in health monitor once.
+// DefaultSLOMonitor alerts when any SLO burns its error budget too fast.
+const DefaultSLOMonitor = "default-slo"
+
+// EnsureDefaults creates the built-in monitors once.
 func EnsureDefaults(st *store.Store) error {
+	if st.Setting("alert.defaults.slo") == "" {
+		if err := st.PutMonitor(&store.Monitor{ID: DefaultSLOMonitor, Name: "SLO burn rate", Kind: "slo", Spec: json.RawMessage(`{}`), Enabled: true}); err != nil {
+			return err
+		}
+		if err := st.SetSetting("alert.defaults.slo", "1"); err != nil {
+			return err
+		}
+	}
 	if st.Setting("alert.defaults") != "" {
 		return nil
 	}
@@ -347,6 +362,61 @@ func (e *Engine) queryConds(m store.Monitor, spec QuerySpec) ([]cond, error) {
 	return out, nil
 }
 
+// sloConds turns SLOs that are burning their error budget into conditions:
+// a fast burn is critical, a slow burn degraded. Both need the short window to
+// agree, so an incident that already ended does not page.
+func (e *Engine) sloConds() ([]cond, error) {
+	reps, err := query.SLOs(e.Store.DB(), e.Store)
+	if err != nil {
+		return nil, err
+	}
+	var out []cond
+	for _, r := range reps {
+		if r.Recent < 20 || r.BudgetLeft == nil {
+			continue // too little traffic to judge
+		}
+		var sev, speed, over string
+		var rate float64
+		switch {
+		case r.Burn1h >= query.FastBurn && r.Burn5m >= query.FastBurn:
+			sev, speed, over, rate = query.Critical, "fast", "hour", r.Burn1h
+		case r.Burn6h >= query.SlowBurn && r.Burn30m >= query.SlowBurn:
+			sev, speed, over, rate = query.Degraded, "slowly", "6 hours", r.Burn6h
+		default:
+			continue
+		}
+		loc := ""
+		if r.Location != "" && !strings.ContainsAny(r.Location, "*?[,") {
+			loc = r.Location
+		}
+		summary := fmt.Sprintf("spending error budget at %s× the sustainable rate over the last %s; %s%% of the %d-day budget is left (target %s%%)",
+			fmtNum(rate), over, fmtNum(*r.BudgetLeft), r.WindowDays, fmtNum(r.Target))
+		if loc == "" && len(r.Locations) > 1 {
+			worst := r.Locations[0]
+			for _, l := range r.Locations {
+				if l.Burn1h > worst.Burn1h {
+					worst = l
+				}
+			}
+			if worst.Burn1h >= 2*r.Burn1h {
+				summary += fmt.Sprintf("; worst location %s at %s×", worst.Location, fmtNum(worst.Burn1h))
+			}
+		}
+		cd := cond{
+			key: r.ID, severity: sev, service: r.Service, location: loc,
+			title:       fmt.Sprintf("SLO %s is burning its error budget %s", r.Name, speed),
+			summary:     summary,
+			details:     Details{Scope: scopeFilter(r.Service, loc), Reasons: []string{summary}},
+			explainMode: "errors",
+		}
+		if r.Kind == "latency" {
+			cd.explainMode = "slow"
+		}
+		out = append(out, cd)
+	}
+	return out, nil
+}
+
 func describe(r query.Request) string {
 	what := r.Signal
 	if r.Signal == query.Metrics {
@@ -415,6 +485,11 @@ func (e *Engine) Evaluate() error {
 		firing[a.MonitorID+"\x00"+a.Key] = a
 	}
 
+	// Health first, SLOs last: an SLO alert defers to an alert that already
+	// notified for the same service.
+	order := map[string]int{"health": 0, "query": 1, "slo": 2}
+	sort.SliceStable(monitors, func(i, j int) bool { return order[monitors[i].Kind] < order[monitors[j].Kind] })
+
 	var health *query.HealthReport
 	now := time.Now().UnixMilli()
 	live := map[string]bool{} // state keys whose condition holds now
@@ -453,6 +528,18 @@ func (e *Engine) Evaluate() error {
 				}
 				continue
 			}
+		case "slo":
+			if conds, err = e.sloConds(); err != nil {
+				return err
+			}
+			for i := range conds {
+				for _, a := range firing {
+					if a.MonitorID != m.ID && a.Service == conds[i].service && (conds[i].location == "" || a.Location == "" || a.Location == conds[i].location) {
+						conds[i].details.CoveredBy = a.Title
+						break
+					}
+				}
+			}
 		}
 		for _, c := range conds {
 			sk := m.ID + "\x00" + c.key
@@ -463,7 +550,7 @@ func (e *Engine) Evaluate() error {
 				a.Severity, a.Title, a.Summary, a.UpdatedMs = c.severity, c.title, c.summary, now
 				if escalated {
 					a.Details = e.evidence(c)
-					if c.details.CausedBy == "" {
+					if c.details.CausedBy == "" && c.details.CoveredBy == "" {
 						a.NotifyError = e.notify("escalated", a)
 					}
 				}
@@ -482,6 +569,11 @@ func (e *Engine) Evaluate() error {
 				Details: e.evidence(c)}
 			if err := e.Store.SaveAlert(a); err != nil {
 				return err
+			}
+			firing[sk] = a
+			if c.details.CoveredBy != "" {
+				e.logf("alert firing: %s (already notified as %q)", a.Title, c.details.CoveredBy)
+				continue
 			}
 			if c.details.CausedBy != "" {
 				// A symptom of another alert: recorded, but nobody is paged twice.
@@ -530,7 +622,7 @@ func (e *Engine) resolve(a *store.Alert, now int64, tell bool) error {
 	a.Status, a.ResolvedMs, a.UpdatedMs = store.AlertResolved, now, now
 	var d Details
 	json.Unmarshal(a.Details, &d)
-	if tell && d.CausedBy == "" {
+	if tell && d.CausedBy == "" && d.CoveredBy == "" {
 		a.NotifyError = e.notify("resolved", a)
 		e.logf("alert resolved: %s", a.Title)
 	}

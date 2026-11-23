@@ -141,6 +141,15 @@ func (a *API) createChannel(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, errStr("kind must be webhook, slack or pagerduty"))
 		return
 	}
+	c.Services, c.Locations = strings.TrimSpace(c.Services), strings.TrimSpace(c.Locations)
+	if !store.ValidGlobs(c.Services) || !store.ValidGlobs(c.Locations) {
+		fail(w, 400, errStr("invalid service or location pattern"))
+		return
+	}
+	if c.Severity != "" && c.Severity != "critical" {
+		fail(w, 400, errStr("severity must be empty (all alerts) or critical"))
+		return
+	}
 	if c.Name == "" {
 		c.Name = c.Kind
 	}

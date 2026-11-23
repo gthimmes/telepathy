@@ -241,3 +241,19 @@ details summary { cursor: pointer; font-weight: 600; }
 .smap .node text.glyph { fill: #fff; font-size: 10px; font-weight: 700; text-anchor: middle; }
 .smap .node.degraded text.glyph { fill: #0b0b0b; }
 .smap .arrow { fill: var(--ink2); }
+
+/* ---- SLOs ---- */
+.slo-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.slo-head .grow { flex: 1; min-width: 220px; }
+.slo-head h2 { margin: 0 0 2px; }
+.slo-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+.slo-stats > div { display: flex; flex-direction: column; gap: 3px; background: var(--raised); border-radius: 6px; padding: 10px 12px; min-width: 0; }
+.slo-stats b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.slo-stats span { font-size: 12px; }
+.slo h3 { margin: 0 0 6px; font-size: 13px; color: var(--ink2); font-weight: 600; }
+.meter { display: block; height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; min-width: 60px; }
+.meter i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+.meter-cell { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.meter-cell .meter { flex: 0 0 70px; }
+.alert-actions { display: flex; flex-direction: column; gap: 6px; align-items: stretch; text-align: center; }
+@media (max-width: 800px) { .slo-stats { grid-template-columns: repeat(2, 1fr); } }
