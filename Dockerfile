@@ -21,6 +21,6 @@ COPY --from=build /telepathy /usr/local/bin/telepathy
 COPY dashboards ./dashboards
 ENV TELEPATHY_DB=/data/telepathy.db
 VOLUME /data
-EXPOSE 4318
+EXPOSE 4318 4317
 ENTRYPOINT ["telepathy"]
 CMD ["serve"]

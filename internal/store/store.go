@@ -112,7 +112,8 @@ CREATE TABLE IF NOT EXISTS spans (
 );
 CREATE INDEX IF NOT EXISTS spans_ts ON spans(ts_ns);
 CREATE INDEX IF NOT EXISTS spans_svc ON spans(service, location, ts_ns);
-CREATE INDEX IF NOT EXISTS spans_trace ON spans(trace_id);
+DROP INDEX IF EXISTS spans_trace;
+CREATE INDEX IF NOT EXISTS spans_trace_span ON spans(trace_id, span_id, service);
 
 CREATE TABLE IF NOT EXISTS logs (
   ts_ns INTEGER NOT NULL,
@@ -174,7 +175,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schema + adminSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
