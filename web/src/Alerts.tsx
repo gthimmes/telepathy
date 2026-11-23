@@ -1,11 +1,17 @@
 import { useState } from 'react'
 import { ago, api, clock, fmt, howLong, href, useFetch, useTime, type Alert, type Channel, type Meta, type Monitor, type Query } from './api'
+
+const SILENCE_FOR = ['1h', '4h', '24h', '7d']
 import { StatusBadge } from './Health'
 
 const explainLink = (a: Alert) => href('/explore', { filter: a.details.scope ?? '', tab: 'explain' })
 
-function AlertRow({ a }: { a: Alert }) {
+function AlertRow({ a, onSilenced }: { a: Alert; onSilenced: () => void }) {
   const d = a.details
+  const silence = async () => {
+    await api.addSilence({ service: a.service, location: a.location, reason: `Silenced from alert: ${a.title}`, duration: '1h' })
+    onSilenced()
+  }
   return (
     <div className="alert">
       <StatusBadge status={a.severity} />
@@ -15,6 +21,8 @@ function AlertRow({ a }: { a: Alert }) {
         <div className="muted">Firing for {howLong(Date.now() - a.startedMs)} · since {clock(a.startedMs)} · {a.monitorName}</div>
         <div className="evidence">
           {d.causedBy && <div><b>Downstream of {d.causedBy}</b> <span className="muted">— a symptom, so no notification was sent for it</span></div>}
+          {d.coveredBy && <div><b>Same incident as “{d.coveredBy}”</b> <span className="muted">— that alert notified, so this one did not</span></div>}
+          {d.silenced && <div><b>Silenced:</b> {d.silenced} <span className="muted">— no notification was sent</span></div>}
           {d.impacted && d.impacted.length > 0 && <div><b>Root of this incident.</b> Also affected: {d.impacted.join(', ')}</div>}
           {d.triggers?.map(t => <div key={t}><b>Likely trigger:</b> ◆ {t}</div>)}
           {d.findings && d.findings.length > 0 && <div className="muted">What is different about the affected requests:</div>}
@@ -26,7 +34,10 @@ function AlertRow({ a }: { a: Alert }) {
           {a.notifyError && <div className="warn">Notification failed — {a.notifyError}</div>}
         </div>
       </div>
-      <a className="btn" href={explainLink(a)}>Explain</a>
+      <div className="alert-actions">
+        <a className="btn" href={explainLink(a)}>Explain</a>
+        {a.service && !d.silenced && <button className="btn" onClick={silence} title={`Stop notifications for ${a.service}${a.location ? ' in ' + a.location : ''} for one hour. The alert stays visible.`}>Silence 1h</button>}
+      </div>
     </div>
   )
 }
@@ -34,6 +45,7 @@ function AlertRow({ a }: { a: Alert }) {
 const AGGS = ['count', 'rate', 'error_rate', 'avg', 'sum', 'min', 'max', 'p50', 'p90', 'p95', 'p99']
 
 function describe(m: Monitor): string {
+  if (m.kind === 'slo') return 'Alerts when any SLO spends its error budget 14.4× too fast over an hour (critical) or 6× over six hours (degraded). Defers to a health alert for the same service, so one incident notifies once.'
   if (m.kind === 'health') {
     const s = m.spec
     const where = [s.service && `service ${s.service}`, s.location && `location ${s.location}`].filter(Boolean).join(', ')
@@ -115,15 +127,54 @@ const HINT: Record<Channel['kind'], string> = {
   pagerduty: 'Events API v2 integration key',
 }
 
+function routing(ch: Channel): string {
+  const parts = [ch.severity === 'critical' ? 'critical alerts' : 'all alerts', ch.services && `for ${ch.services}`, ch.locations && `in ${ch.locations}`].filter(Boolean)
+  return 'Receives ' + parts.join(' ')
+}
+
+function Silences({ n, bump }: { n: number; bump: () => void }) {
+  const { data, error } = useFetch(() => api.silences(), [n])
+  const [f, setF] = useState({ service: '', location: '', reason: '', duration: '1h' })
+  const [err, setErr] = useState('')
+  const add = async (e: React.FormEvent) => {
+    e.preventDefault()
+    try { await api.addSilence(f); setF({ service: '', location: '', reason: '', duration: '1h' }); setErr(''); bump() }
+    catch (e) { setErr(String((e as Error).message)) }
+  }
+  const now = Date.now()
+  return (
+    <div className="card">
+      <h2>Silences</h2>
+      {(error || err) && <div className="error">{error || err}</div>}
+      {data?.silences.length === 0 && <p className="muted">No silences. A silence stops notifications for matching services and locations for a while — planned maintenance, an incident already being handled. Alerts are still recorded.</p>}
+      {data?.silences.map(s => (
+        <div key={s.id} className="list-row">
+          <span className="kind">{s.startsMs > now ? 'scheduled' : 'active'}</span>
+          <div className="grow"><b>{s.service || 'every service'}</b> in <b>{s.location || 'every location'}</b>
+            <div className="reason">{s.reason || 'No reason given'} · ends in {howLong(s.endsMs - now)}</div></div>
+          <button className="btn danger" onClick={async () => { await api.deleteSilence(s.id); bump() }}>End now</button>
+        </div>
+      ))}
+      <form className="inline-form" onSubmit={add}>
+        <label>Services<input value={f.service} onChange={e => setF({ ...f, service: e.target.value })} placeholder="all, or pay*" spellCheck={false} size={14} /></label>
+        <label>Locations<input value={f.location} onChange={e => setF({ ...f, location: e.target.value })} placeholder="all, or eu-*" spellCheck={false} size={12} /></label>
+        <label className="grow">Reason<input required value={f.reason} onChange={e => setF({ ...f, reason: e.target.value })} placeholder="Database failover drill" /></label>
+        <label>For<select value={f.duration} onChange={e => setF({ ...f, duration: e.target.value })}>{SILENCE_FOR.map(d => <option key={d}>{d}</option>)}</select></label>
+        <button className="btn primary">Silence</button>
+      </form>
+    </div>
+  )
+}
+
 function Channels() {
   const [n, setN] = useState(0)
   const { data, error } = useFetch(() => api.channels(), [n])
-  const [c, setC] = useState<{ kind: Channel['kind']; name: string; url: string }>({ kind: 'slack', name: '', url: '' })
+  const [c, setC] = useState({ kind: 'slack' as Channel['kind'], name: '', url: '', services: '', locations: '', severity: '' })
   const [msg, setMsg] = useState<{ id: string; text: string; ok: boolean }>()
   const [err, setErr] = useState('')
   const add = async (e: React.FormEvent) => {
     e.preventDefault()
-    try { await api.addChannel(c); setC({ ...c, name: '', url: '' }); setErr(''); setN(x => x + 1) }
+    try { await api.addChannel(c); setC({ ...c, name: '', url: '', services: '', locations: '', severity: '' }); setErr(''); setN(x => x + 1) }
     catch (e) { setErr(String((e as Error).message)) }
   }
   const test = async (id: string) => {
@@ -140,6 +191,7 @@ function Channels() {
         <div key={ch.id} className="list-row">
           <span className="kind">{ch.kind}</span>
           <div className="grow"><b>{ch.name}</b> <span className="muted mono">{ch.url}</span>
+            <div className="reason">{routing(ch)}</div>
             {msg?.id === ch.id && <div className={msg.ok ? 'reason' : 'warn'}>{msg.text}</div>}</div>
           <button className="btn" onClick={() => test(ch.id)}>Send test</button>
           <button className="btn danger" onClick={async () => { await api.deleteChannel(ch.id); setN(x => x + 1) }}>Remove</button>
@@ -151,17 +203,23 @@ function Channels() {
         <label>Name<input value={c.name} onChange={e => setC({ ...c, name: e.target.value })} placeholder="#oncall" /></label>
         <label className="grow">{c.kind === 'pagerduty' ? 'Routing key' : 'URL'}
           <input required type="password" autoComplete="off" value={c.url} onChange={e => setC({ ...c, url: e.target.value })} placeholder={HINT[c.kind]} /></label>
+        <label>Services<input value={c.services} onChange={e => setC({ ...c, services: e.target.value })} placeholder="all, or pay*, checkout" spellCheck={false} size={18} /></label>
+        <label>Locations<input value={c.locations} onChange={e => setC({ ...c, locations: e.target.value })} placeholder="all, or eu-*" spellCheck={false} size={12} /></label>
+        <label>Severity<select value={c.severity} onChange={e => setC({ ...c, severity: e.target.value })}><option value="">All alerts</option><option value="critical">Critical only</option></select></label>
         <button className="btn primary">Add channel</button>
       </form>
-      <p className="muted">Every alert goes to every channel. Notifications include what changed and what is different about the affected requests.</p>
+      <p className="muted">A channel receives the alerts that match its services, locations and severity; leave them empty to receive everything. Notifications include what changed and what is different about the affected requests.</p>
     </div>
   )
 }
 
 export default function Alerts() {
   const { tick } = useTime()
-  const { data, error } = useFetch(() => api.alerts(), [tick])
+  const [n, setN] = useState(0)
+  const bump = () => setN(x => x + 1)
+  const { data, error } = useFetch(() => api.alerts(), [tick, n])
   const meta = useFetch(() => api.meta(), [])
+  const quiet = (a: Alert) => Number(!!(a.details.causedBy || a.details.coveredBy || a.details.silenced))
   return (
     <>
       <div className="page-head"><h1>Alerts</h1>{data && <span className="muted">{data.firing.length} firing</span>}</div>
@@ -169,11 +227,14 @@ export default function Alerts() {
       <div className="card">
         <h2>Firing now</h2>
         {data?.firing.length === 0 && <p className="muted">Nothing is firing.</p>}
-        {data && [...data.firing].sort((a, b) => Number(!!a.details.causedBy) - Number(!!b.details.causedBy)).map(a => <AlertRow key={a.id} a={a} />)}
+        {data && [...data.firing].sort((a, b) => quiet(a) - quiet(b)).map(a => <AlertRow key={a.id} a={a} onSilenced={bump} />)}
       </div>
       <div className="cols">
         <Monitors meta={meta.data} />
-        <Channels />
+        <div>
+          <Channels />
+          <Silences n={n} bump={bump} />
+        </div>
       </div>
       <div className="card">
         <h2>Recently resolved</h2>

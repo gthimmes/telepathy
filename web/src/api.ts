@@ -36,15 +36,24 @@ export interface Trace { traceId: string; spans: Span[]; logs: Log[] }
 export interface Meta { services: string[]; locations: string[]; metrics: string[] }
 export interface Widget { id: string; title: string; type: 'timeseries' | 'stat' | 'toplist'; w: number; query: Query }
 export interface Session { authRequired: boolean; authenticated: boolean; role: string }
-export interface AlertDetails { scope?: string; reasons?: string[]; value?: number; unit?: string; findings?: Finding[]; triggers?: string[]; causedBy?: string; impacted?: string[] }
+export interface AlertDetails { scope?: string; reasons?: string[]; value?: number; unit?: string; findings?: Finding[]; triggers?: string[]; causedBy?: string; impacted?: string[]; coveredBy?: string; silenced?: string }
 export interface Alert {
   id: number; monitorId: string; monitorName: string; key: string; status: 'firing' | 'resolved'; severity: Status
   title: string; summary: string; service: string; location: string
   startedMs: number; updatedMs: number; resolvedMs: number; details: AlertDetails; notifyError?: string
 }
 export interface QuerySpec { query: Query; op: string; threshold: number; window?: string; severity?: string; forEvals?: number }
-export interface Monitor { id: string; name: string; kind: 'health' | 'query'; spec: Partial<QuerySpec> & { statuses?: string[]; service?: string; location?: string }; enabled: boolean }
-export interface Channel { id: string; name: string; kind: 'webhook' | 'slack' | 'pagerduty'; url: string }
+export interface Monitor { id: string; name: string; kind: 'health' | 'query' | 'slo'; spec: Partial<QuerySpec> & { statuses?: string[]; service?: string; location?: string }; enabled: boolean }
+export interface Channel { id: string; name: string; kind: 'webhook' | 'slack' | 'pagerduty'; url: string; services: string; locations: string; severity: string }
+export interface Silence { id: string; service: string; location: string; reason: string; startsMs: number; endsMs: number }
+export type SLOState = 'ok' | 'slow-burn' | 'fast-burn' | 'exhausted' | 'no-data'
+export interface SLOLocation { location: string; good: number; total: number; sli: number | null; budgetLeft: number | null; burn1h: number }
+export interface SLO {
+  id: string; name: string; service: string; location: string; kind: 'availability' | 'latency'; thresholdMs: number
+  target: number; windowDays: number; state: SLOState; good: number; total: number; sli: number | null; budgetLeft: number | null
+  burn5m: number; burn30m: number; burn1h: number; burn6h: number; recentRequests: number
+  locations: SLOLocation[]; timestamps: number[]; budget: number[]
+}
 export interface Token { id: string; name: string; role: string; prefix: string; createdMs: number; lastUsedMs: number }
 export interface MapNode { service: string; status: Status; rate: number; errorRate: number; p95: number }
 export interface MapEdge { from: string; to: string; calls: number; rate: number; errorRate: number; p95: number }
@@ -90,6 +99,12 @@ export const api = {
   addChannel: (c: Partial<Channel>) => call<Channel>('POST', '/channels', c),
   deleteChannel: (id: string) => call<void>('DELETE', '/channels/' + id),
   testChannel: (id: string) => call<{ ok: boolean }>('POST', `/channels/${id}/test`, {}),
+  slos: () => call<{ slos: SLO[] }>('GET', '/slos'),
+  saveSLO: (s: Partial<SLO>) => call<SLO>('POST', '/slos', s),
+  deleteSLO: (id: string) => call<void>('DELETE', '/slos/' + id),
+  silences: () => call<{ silences: Silence[] }>('GET', '/silences'),
+  addSilence: (s: { service: string; location: string; reason: string; duration: string }) => call<Silence>('POST', '/silences', s),
+  deleteSilence: (id: string) => call<void>('DELETE', '/silences/' + id),
   tokens: () => call<{ tokens: Token[] }>('GET', '/tokens'),
   createToken: (name: string, role: string) => call<{ token: Token; secret: string }>('POST', '/tokens', { name, role }),
   deleteToken: (id: string) => call<void>('DELETE', '/tokens/' + id),

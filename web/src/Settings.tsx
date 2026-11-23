@@ -90,6 +90,16 @@ OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20<ingest token>
 OTEL_RESOURCE_ATTRIBUTES=telepathy.location=store-042`}</pre>
       </div>
+      <div className="card">
+        <h2>AI agents (MCP)</h2>
+        <p className="muted">Telepathy is a Model Context Protocol server: an agent can read health, alerts and SLOs, run Explain, and query traces, logs and metrics. Every tool is read-only{session.authRequired ? '; use a token with the read role' : ''}.</p>
+        <pre>{`# Claude Code
+claude mcp add --transport http telepathy ${origin}/api/v1/mcp${session.authRequired ? ` \\
+  --header "Authorization: Bearer <read token>"` : ''}
+
+# Any MCP client (Streamable HTTP)
+${origin}/api/v1/mcp`}</pre>
+      </div>
     </>
   )
 }

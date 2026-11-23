@@ -200,13 +200,16 @@ func (s *Store) DeleteMonitor(id string) error {
 type Channel struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	Kind      string `json:"kind"` // webhook | slack | pagerduty
-	URL       string `json:"url"`  // webhook URL, or the PagerDuty routing key
+	Kind      string `json:"kind"`      // webhook | slack | pagerduty
+	URL       string `json:"url"`       // webhook URL, or the PagerDuty routing key
+	Services  string `json:"services"`  // routing: comma-separated service globs; empty = all
+	Locations string `json:"locations"` // routing: comma-separated location globs; empty = all
+	Severity  string `json:"severity"`  // routing: "critical" = critical alerts only; empty = all
 	CreatedMs int64  `json:"createdMs"`
 }
 
 func (s *Store) ListChannels() ([]Channel, error) {
-	rows, err := s.db.Query(`SELECT id,name,kind,url,created_ms FROM channels ORDER BY created_ms`)
+	rows, err := s.db.Query(`SELECT id,name,kind,url,services,locations,severity,created_ms FROM channels ORDER BY created_ms`)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +217,7 @@ func (s *Store) ListChannels() ([]Channel, error) {
 	out := []Channel{}
 	for rows.Next() {
 		var c Channel
-		if err := rows.Scan(&c.ID, &c.Name, &c.Kind, &c.URL, &c.CreatedMs); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Kind, &c.URL, &c.Services, &c.Locations, &c.Severity, &c.CreatedMs); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -225,7 +228,8 @@ func (s *Store) ListChannels() ([]Channel, error) {
 func (s *Store) CreateChannel(c *Channel) error {
 	c.ID, c.CreatedMs = NewID(), time.Now().UnixMilli()
 	return s.write(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`INSERT INTO channels (id,name,kind,url,created_ms) VALUES (?,?,?,?,?)`, c.ID, c.Name, c.Kind, c.URL, c.CreatedMs)
+		_, err := tx.Exec(`INSERT INTO channels (id,name,kind,url,services,locations,severity,created_ms) VALUES (?,?,?,?,?,?,?,?)`,
+			c.ID, c.Name, c.Kind, c.URL, c.Services, c.Locations, c.Severity, c.CreatedMs)
 		return err
 	})
 }

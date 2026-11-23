@@ -70,6 +70,7 @@ func TestRootCauseGrouping(t *testing.T) {
 
 	// Recovery: again only the root says so.
 	st.DB().Exec(`UPDATE spans SET status=1`)
+	st.RebuildRollups() // spans were edited behind the store's back
 	e.Evaluate()
 	e.Evaluate()
 	if firing, _ := st.FiringAlerts(); len(firing) != 0 {

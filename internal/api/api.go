@@ -38,6 +38,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/dashboards/{id}", a.putDashboard)
 	mux.HandleFunc("DELETE /api/v1/dashboards/{id}", a.deleteDashboard)
 	a.registerM1(mux)
+	a.registerM2(mux)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

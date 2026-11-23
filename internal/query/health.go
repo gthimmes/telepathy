@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/gthimmes/telepathy/internal/store"
 )
 
 // Health statuses, ordered by severity.
@@ -49,8 +51,8 @@ type HealthReport struct {
 const baselineSlices = 12
 
 type slice struct {
-	n, errs int
-	durs    []float64
+	n, errs int64
+	hist    store.Hist
 }
 
 func median(v []float64) float64 {
@@ -67,49 +69,56 @@ func median(v []float64) float64 {
 // recent baseline (the median of the preceding window-sized slices, which
 // keeps an earlier incident from poisoning the baseline) and against absolute
 // error-rate guardrails. A "request" is a server/consumer span or a root span.
+//
+// It reads the per-minute rollups, not spans, so its cost does not grow with
+// traffic. The current slice is the last `window` of whole minutes plus the
+// minute in progress; latency percentiles come from merged histograms and are
+// accurate to about 2%.
 func Health(db *sql.DB, window time.Duration) (*HealthReport, error) {
-	now := time.Now().UnixNano()
-	w := int64(window)
-	from := now - w*(baselineSlices+1)
-	rows, err := db.Query(`SELECT service, location, ts_ns, duration_ns, status FROM spans
-		WHERE ts_ns>=? AND ts_ns<? AND (kind IN ('server','consumer') OR parent_id='')`, from, now)
+	nowT := time.Now()
+	now := nowT.UnixNano()
+	w := int64(window.Seconds()) / 60 * 60
+	if w < 60 {
+		w = 60
+	}
+	nowSec := nowT.Unix()
+	curStart := nowSec - nowSec%60 - w
+	from := curStart - w*baselineSlices
+	rolls, err := store.ReadRollups(db, store.StepMinute, from, nowSec+1, "", "")
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	type key struct{ svc, loc string }
 	data := map[key]*[baselineSlices + 1]slice{}
-	for rows.Next() {
-		var k key
-		var ts, dur int64
-		var status int
-		if err := rows.Scan(&k.svc, &k.loc, &ts, &dur, &status); err != nil {
-			return nil, err
+	for _, r := range rolls {
+		idx := baselineSlices
+		if r.Ts < curStart {
+			idx = baselineSlices - int((curStart-r.Ts+w-1)/w)
 		}
-		idx := int((ts - from) / w) // last index = current window
-		if idx < 0 || idx > baselineSlices {
+		if idx < 0 {
 			continue
 		}
+		k := key{r.Service, r.Location}
 		d := data[k]
 		if d == nil {
 			d = &[baselineSlices + 1]slice{}
 			data[k] = d
 		}
-		d[idx].n++
-		if status == 2 {
-			d[idx].errs++
+		sl := &d[idx]
+		if sl.hist == nil {
+			sl.hist = store.Hist{}
 		}
-		d[idx].durs = append(d[idx].durs, float64(dur)/1e6)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		sl.n += r.N
+		sl.errs += r.Errs
+		sl.hist.Merge(r.Hist)
 	}
 
 	rep := &HealthReport{GeneratedMs: now / 1e6, WindowSec: int(window.Seconds()), Cells: []Cell{},
 		Summary: map[string]int{Healthy: 0, Degraded: 0, Critical: 0, Silent: 0}}
 	svcWorst, locWorst := map[string]string{}, map[string]string{}
-	secs := window.Seconds()
+	secs := float64(w)                              // a baseline slice
+	curSecs := float64(now)/1e9 - float64(curStart) // the current slice, which includes the minute in progress
 	for k, d := range data {
 		cur := &d[baselineSlices]
 		c := Cell{Service: k.svc, Location: k.loc, Status: Healthy, Requests: int64(cur.n), Reasons: []string{}}
@@ -119,10 +128,9 @@ func Health(db *sql.DB, window time.Duration) (*HealthReport, error) {
 			if s.n == 0 {
 				continue
 			}
-			sort.Float64s(s.durs)
 			bRates = append(bRates, float64(s.n)/secs)
 			bErrs = append(bErrs, float64(s.errs)/float64(s.n)*100)
-			bP95s = append(bP95s, Quantile(s.durs, 0.95))
+			bP95s = append(bP95s, s.hist.Quantile(0.95))
 		}
 		hasBase := len(bRates) >= 2
 		c.BaseRate, c.BaseError, c.BaseP95 = median(bRates), median(bErrs), median(bP95s)
@@ -139,10 +147,9 @@ func Health(db *sql.DB, window time.Duration) (*HealthReport, error) {
 			}
 			bump(Silent, fmt.Sprintf("no traffic in the last %s (baseline %.1f req/s)", window, c.BaseRate))
 		} else {
-			sort.Float64s(cur.durs)
-			c.Rate = float64(cur.n) / secs
+			c.Rate = float64(cur.n) / curSecs
 			c.ErrorRate = float64(cur.errs) / float64(cur.n) * 100
-			c.P95 = Quantile(cur.durs, 0.95)
+			c.P95 = cur.hist.Quantile(0.95)
 			enough := cur.n >= 10
 			errEnough := enough && cur.errs >= 5 // a couple of stray failures is not a signal
 
