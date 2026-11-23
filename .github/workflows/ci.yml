@@ -28,3 +28,19 @@ jobs:
         run: go test ./...
       - name: Build
         run: go build ./cmd/telepathy
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t telepathy:ci .
+      - name: Smoke test
+        run: |
+          docker run -d --name tp -p 4318:4318 telepathy:ci serve --demo
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:4318/api/v1/status && exit 0
+            sleep 1
+          done
+          docker logs tp
+          exit 1

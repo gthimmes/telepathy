@@ -48,7 +48,8 @@ function describe(m: Monitor): string {
 function MonitorForm({ meta, onSaved }: { meta?: Meta; onSaved: () => void }) {
   const blank = { name: '', op: '>', threshold: '', window: '5m', severity: 'critical', split: '' }
   const [f, setF] = useState(blank)
-  const [q, setQ] = useState<Query>({ signal: 'spans', agg: 'error_rate', filter: '' })
+  const blankQ: Query = { signal: 'spans', agg: 'error_rate', filter: '' }
+  const [q, setQ] = useState<Query>(blankQ)
   const [err, setErr] = useState('')
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -57,7 +58,7 @@ function MonitorForm({ meta, onSaved }: { meta?: Meta; onSaved: () => void }) {
         name: f.name, kind: 'query', enabled: true,
         spec: { query: { ...q, groupBy: f.split ? [f.split.trim()] : [] }, op: f.op, threshold: Number(f.threshold), window: f.window, severity: f.severity },
       })
-      setF(blank); setErr(''); onSaved()
+      setF(blank); setQ(blankQ); setErr(''); onSaved()
     } catch (e) { setErr(String((e as Error).message)) }
   }
   return (
